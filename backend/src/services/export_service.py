@@ -12,6 +12,17 @@ CURRENT_FORMAT_VERSION = 6
 SUPPORTED_FORMAT_VERSIONS = {1, 2, 3, 4, 5, 6}
 
 
+def _make_json_serializable(value):
+    """Convert export-only container values to JSON-compatible values."""
+    if isinstance(value, (set, frozenset)):
+        return [_make_json_serializable(item) for item in sorted(value, key=str)]
+    if isinstance(value, dict):
+        return {key: _make_json_serializable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_make_json_serializable(item) for item in value]
+    return value
+
+
 async def _build_precomputed(novel_id: str) -> dict | None:
     """Build precomputed visualization data for desktop .air import.
 
@@ -211,7 +222,7 @@ async def export_novel(novel_id: str, *, skip_content: bool = False) -> dict:
         }
         if precomputed:
             result["precomputed"] = precomputed
-        return result
+        return _make_json_serializable(result)
     finally:
         await conn.close()
 

@@ -363,6 +363,31 @@ async def aggregate_person(novel_id: str, person_name: str) -> PersonProfile:
             other_person=other, stages=merged, category=category,
         ))
 
+    # Apply whole-book user relation corrections after AI aggregation.
+    conn = await get_connection()
+    try:
+        cur = await conn.execute(
+            "SELECT override_json FROM entity_overrides WHERE novel_id = ? AND override_type = 'relation_override'",
+            (novel_id,),
+        )
+        relation_overrides = [json.loads(row[0]) for row in await cur.fetchall()]
+    finally:
+        await conn.close()
+    for ov in relation_overrides:
+        a = alias_map.get(ov.get("person_a", ""), ov.get("person_a", ""))
+        b = alias_map.get(ov.get("person_b", ""), ov.get("person_b", ""))
+        if person_name not in {a, b} or a == b:
+            continue
+        other = b if person_name == a else a
+        relation_chains = [r for r in relation_chains if r.other_person != other]
+        if ov.get("action") != "delete":
+            rtype = ov.get("relation_type") or "其他"
+            relation_chains.append(RelationChain(
+                other_person=other,
+                stages=[RelationStage(chapters=[], relation_type=rtype, evidences=["人工修正"])],
+                category=classify_relation_category(rtype),
+            ))
+
     # Merge duplicate appearances: group by description, collect chapters
     _appearance_map: dict[str, list[int]] = {}
     for ch, desc in _raw_appearances:

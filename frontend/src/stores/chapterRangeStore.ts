@@ -32,8 +32,9 @@ export const useChapterRangeStore = create<ChapterRangeState>((set, get) => ({
     set({
       analyzedFirst: first,
       analyzedLast: last,
-      // If range is at defaults, snap to full analyzed range
-      chapterStart: state.chapterStart <= 1 ? first : state.chapterStart,
+      // If range is at defaults, start with the latest 100 analyzed chapters.
+      // Users can still move the slider or use resetToFull() to view all chapters.
+      chapterStart: state.chapterStart <= 1 ? Math.max(first, last - 99) : state.chapterStart,
       chapterEnd: state.chapterEnd <= 1 ? last : state.chapterEnd,
     })
   },

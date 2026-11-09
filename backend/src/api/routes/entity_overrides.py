@@ -52,6 +52,13 @@ class RetypeRequest(BaseModel):
     to: str                  # person | location | item | org | concept
 
 
+class RelationOverrideRequest(BaseModel):
+    person_a: str
+    person_b: str
+    action: str  # add, update, delete
+    relation_type: str | None = None
+
+
 async def _require_novel(novel_id: str) -> None:
     if not await novel_store.get_novel(novel_id):
         raise HTTPException(status_code=404, detail="小说不存在")
@@ -61,6 +68,7 @@ async def _invalidate_views(novel_id: str) -> None:
     """实体级 override 写入后的缓存失效:聚合/别名缓存 + 地图响应缓存。"""
     entity_aggregator.invalidate_cache(novel_id)
     await visualization_service.invalidate_map_response_cache(novel_id)
+    visualization_service.invalidate_graph_response_cache(novel_id)
 
 
 def _snapshot(alias_map: dict[str, str], names: list[str]) -> dict[str, str]:
@@ -123,6 +131,37 @@ async def merge_aliases(novel_id: str, body: MergeRequest):
     return {"status": "ok", "override_id": oid}
 
 
+@router.post("/relation")
+async def override_relation(novel_id: str, body: RelationOverrideRequest):
+    """Persist a user correction for one whole-book person relation."""
+    await _require_novel(novel_id)
+    a, b = body.person_a.strip(), body.person_b.strip()
+    action = body.action.strip().lower()
+    relation_type = (body.relation_type or "").strip()
+    if not a or not b or a == b:
+        raise HTTPException(status_code=400, detail="人物关系两端必须是不同人物")
+    if action not in {"add", "update", "delete"}:
+        raise HTTPException(status_code=400, detail="不支持的关系操作")
+    if action in {"add", "update"} and not relation_type:
+        raise HTTPException(status_code=400, detail="新增或修改关系必须提供关系类型")
+    key = f"{min(a, b)}↔{max(a, b)}"
+    alias_map = await build_alias_map(novel_id)
+    oid = await entity_override_store.save_override(
+        novel_id,
+        "relation_override",
+        key,
+        {
+            "person_a": a,
+            "person_b": b,
+            "action": action,
+            "relation_type": relation_type or None,
+            "auto_snapshot": _snapshot(alias_map, [a, b]),
+        },
+    )
+    await _invalidate_views(novel_id)
+    return {"status": "ok", "override_id": oid}
+
+
 @router.post("/split")
 async def split_aliases(novel_id: str, body: SplitRequest):
     await _require_novel(novel_id)
@@ -140,7 +179,8 @@ async def split_aliases(novel_id: str, body: SplitRequest):
 
     # Composite key so multiple splits from one source to different destinations
     # don't collide on the UNIQUE(novel_id, type, key) constraint.
-    override_key = f"{source}→{to or '(独立)'}"
+    alias_key = ",".join(sorted(set(aliases)))
+    override_key = f"{source}→{to or '(独立)'}:{alias_key}"
     alias_map = await build_alias_map(novel_id)
     oid = await entity_override_store.save_override(
         novel_id,

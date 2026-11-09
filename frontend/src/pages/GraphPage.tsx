@@ -118,10 +118,15 @@ export default function GraphPage() {
   const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({})
 
   // Filters
-  const [minChapters, setMinChapters] = useState(1)
-  const [minEdgeWeight, setMinEdgeWeight] = useState(1)
+  const [minChapters, setMinChapters] = useState(10)
+  const [minEdgeWeight, setMinEdgeWeight] = useState(8)
   const [maxEdgeWeight, setMaxEdgeWeight] = useState(1)
   const [showFilters, setShowFilters] = useState(false)
+  const [repulsionScale, setRepulsionScale] = useState(300)
+  const [spreadScale, setSpreadScale] = useState(100)
+  const [linkDistanceScale, setLinkDistanceScale] = useState(100)
+  const [containmentScale, setContainmentScale] = useState(100)
+  const [labelDensity, setLabelDensity] = useState(100)
   // Category filter — all enabled by default
   const [hiddenCategories, setHiddenCategories] = useState<Set<string>>(new Set())
 
@@ -208,16 +213,11 @@ export default function GraphPage() {
         setNodes((data.nodes as GraphNode[]) ?? [])
         setEdges((data.edges as GraphEdge[]) ?? [])
         setCategoryCounts((data.category_counts as Record<string, number>) ?? {})
-        // Apply smart defaults from backend
-        const suggested = (data.suggested_min_edge_weight as number) ?? 1
         const maxW = (data.max_edge_weight as number) ?? 1
-        setMinEdgeWeight(suggested)
+        // User-selected defaults for a readable dense graph.
+        setMinChapters(10)
+        setMinEdgeWeight(8)
         setMaxEdgeWeight(maxW)
-        // Auto-set minChapters for very large graphs
-        const nodeCount = (data.nodes as GraphNode[])?.length ?? 0
-        if (nodeCount > 200) setMinChapters(3)
-        else if (nodeCount > 100) setMinChapters(2)
-        else setMinChapters(1)
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -372,30 +372,42 @@ export default function GraphPage() {
     // Charge: stronger repulsion for dense graphs
     const charge = fg.d3Force("charge")
     if (charge && typeof charge.strength === "function") {
-      const baseCharge = nodeCount > 150 ? -60 : nodeCount > 80 ? -35 : -15
+      const baseCharge = (nodeCount > 300 ? -220 : nodeCount > 150 ? -140 : nodeCount > 80 ? -80 : -30) * repulsionScale / 100
       charge.strength((node: GraphNode) => {
         const deg = degreeMap.get(node.id) || 0
-        return deg <= 1 ? baseCharge * 0.6 : baseCharge - deg * 3
+        return deg <= 1 ? baseCharge * 0.7 : baseCharge - deg * 5
       })
     }
 
     // Link distance: spread connected nodes further in dense graphs
     const linkForce = fg.d3Force("link")
     if (linkForce && typeof linkForce.distance === "function") {
-      const baseDist = nodeCount > 150 ? 70 : nodeCount > 80 ? 50 : 35
+      const baseDist = (nodeCount > 300 ? 115 : nodeCount > 150 ? 80 : nodeCount > 80 ? 55 : 35) * linkDistanceScale / 100
       linkForce.distance(baseDist)
     }
 
-    const containRadius = Math.max(200, Math.sqrt(nodeCount) * 45)
-    const containStrength = 0.06
+    // The graph used to be held in a small central circle.  This left a lot
+    // of empty canvas while all nodes overlapped in the middle.  Give nodes
+    // an outward force first, then keep them from escaping too far.
+    const spreadRadius = Math.max(320, Math.sqrt(nodeCount) * 105 * spreadScale / 100)
+    const containRadius = spreadRadius * 1.35
+    const spreadStrength = nodeCount > 150 ? 0.18 : 0.12
+    const containStrength = 0.025 * containmentScale / 100
     interface SimNode { x?: number; y?: number; vx?: number; vy?: number }
     let simNodes: SimNode[] = []
     const containment = Object.assign(
       (alpha: number) => {
-        for (const node of simNodes) {
+        for (let i = 0; i < simNodes.length; i++) {
+          const node = simNodes[i]
           const x = node.x || 0
           const y = node.y || 0
           const dist = Math.sqrt(x * x + y * y)
+          if (dist < spreadRadius) {
+            const angle = dist > 1 ? Math.atan2(y, x) : (i / simNodes.length) * Math.PI * 2
+            const outward = ((spreadRadius - dist) / spreadRadius) * spreadStrength * alpha
+            node.vx = (node.vx || 0) + Math.cos(angle) * outward * 24
+            node.vy = (node.vy || 0) + Math.sin(angle) * outward * 24
+          }
           if (dist > containRadius) {
             const k = ((dist - containRadius) / dist) * containStrength * alpha
             node.vx = (node.vx || 0) - x * k
@@ -408,7 +420,7 @@ export default function GraphPage() {
     fg.d3Force("containment", containment as never)
 
     fg.d3ReheatSimulation()
-  }, [graphData, degreeMap, filteredNodes.length])
+  }, [graphData, degreeMap, filteredNodes.length, repulsionScale, spreadScale, linkDistanceScale, containmentScale])
 
   const handleEngineStop = useCallback(() => {
     graphRef.current?.zoomToFit(400, 60)
@@ -487,7 +499,7 @@ export default function GraphPage() {
           })}
 
           {showFilters && (
-            <div className="absolute top-8 left-0 w-56 rounded-xl border border-border bg-card p-3 shadow-lg space-y-3">
+            <div className="absolute top-8 left-0 w-64 rounded-xl border border-border bg-card p-3 shadow-lg space-y-3">
               <div>
                 <label className="text-muted-foreground text-xs">
                   最少出场章节: {minChapters}
@@ -508,11 +520,48 @@ export default function GraphPage() {
                 <input
                   type="range"
                   min={1}
-                  max={Math.max(5, maxEdgeWeight)}
+                  max={Math.max(8, maxEdgeWeight)}
                   value={minEdgeWeight}
                   onChange={(e) => setMinEdgeWeight(Number(e.target.value))}
                   className="w-full h-1.5 mt-1 accent-primary"
                 />
+              </div>
+              <div className="border-t pt-2 space-y-2">
+                <p className="text-xs font-medium">布局设置</p>
+                <div>
+                  <label className="text-muted-foreground text-xs">节点互斥: {repulsionScale}%</label>
+                  <input type="range" min={25} max={300} step={5} value={repulsionScale} onChange={(e) => setRepulsionScale(Number(e.target.value))} className="w-full h-1.5 mt-1 accent-primary" />
+                </div>
+                <div>
+                  <label className="text-muted-foreground text-xs">扩散范围: {spreadScale}%</label>
+                  <input type="range" min={50} max={250} step={5} value={spreadScale} onChange={(e) => setSpreadScale(Number(e.target.value))} className="w-full h-1.5 mt-1 accent-primary" />
+                </div>
+                <div>
+                  <label className="text-muted-foreground text-xs">关系线距离: {linkDistanceScale}%</label>
+                  <input type="range" min={50} max={250} step={5} value={linkDistanceScale} onChange={(e) => setLinkDistanceScale(Number(e.target.value))} className="w-full h-1.5 mt-1 accent-primary" />
+                </div>
+                <div>
+                  <label className="text-muted-foreground text-xs">中心收拢: {containmentScale}%</label>
+                  <input type="range" min={0} max={200} step={5} value={containmentScale} onChange={(e) => setContainmentScale(Number(e.target.value))} className="w-full h-1.5 mt-1 accent-primary" />
+                </div>
+                <div>
+                  <label className="text-muted-foreground text-xs">标签密度: {labelDensity}%</label>
+                  <input type="range" min={25} max={300} step={5} value={labelDensity} onChange={(e) => setLabelDensity(Number(e.target.value))} className="w-full h-1.5 mt-1 accent-primary" />
+                </div>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  className="w-full"
+                  onClick={() => {
+                    setRepulsionScale(300)
+                    setSpreadScale(100)
+                    setLinkDistanceScale(100)
+                    setContainmentScale(100)
+                    setLabelDensity(100)
+                  }}
+                >
+                  恢复布局默认值
+                </Button>
               </div>
               <p className="text-muted-foreground text-[10px] border-t pt-2">
                 {filteredNodes.length}/{nodes.length} 人物，{filteredEdges.length}/{edges.length} 关系
@@ -719,7 +768,7 @@ export default function GraphPage() {
 
             // ── Label rendering (improved readability) ──
             const alwaysShow = isOnPath || isPathStart || isHovered || isConnected
-            const chapterThreshold = Math.max(2, Math.round(20 / globalScale))
+            const chapterThreshold = Math.max(2, Math.round(20 * 100 / labelDensity / globalScale))
             const showLabel = alwaysShow || node.chapter_count >= chapterThreshold
 
             if (showLabel) {

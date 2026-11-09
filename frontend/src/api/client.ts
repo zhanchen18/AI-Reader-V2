@@ -46,7 +46,13 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     },
   })
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`)
+    const body = await res.json().catch(() => null)
+    const detail = typeof body?.detail === "string"
+      ? body.detail
+      : typeof body?.error === "string"
+        ? body.error
+        : null
+    throw new Error(detail ?? `API error: ${res.status} ${res.statusText}`)
   }
   return res.json() as Promise<T>
 }
@@ -562,6 +568,19 @@ export function splitAliases(
   return overrideRequest(`/novels/${novelId}/entity-overrides/split`, {
     method: "POST",
     body: JSON.stringify({ source, aliases, to }),
+  })
+}
+
+export function overrideRelation(
+  novelId: string,
+  personA: string,
+  personB: string,
+  action: "add" | "update" | "delete",
+  relationType?: string,
+): Promise<{ status: string; override_id: number }> {
+  return overrideRequest(`/novels/${novelId}/entity-overrides/relation`, {
+    method: "POST",
+    body: JSON.stringify({ person_a: personA, person_b: personB, action, relation_type: relationType }),
   })
 }
 

@@ -207,6 +207,17 @@ class OpenAICompatibleClient:
     def _is_local_server(self) -> bool:
         return any(host in self.base_url for host in ("localhost", "127.0.0.1", "0.0.0.0"))
 
+    def _is_zhipu_glm53_flash(self) -> bool:
+        """Return whether this is a BigModel GLM-5.3-Flash endpoint."""
+        return (
+            "bigmodel.cn" in self.base_url.lower()
+            and self.model.lower() in {
+                "glm-5.3-flash",
+                "glm-5.3-flashx",
+                "glm-5.3-flashx-legal",
+            }
+        )
+
     async def generate(
         self,
         system: str,
@@ -239,6 +250,11 @@ class OpenAICompatibleClient:
         effective_max = max_tokens
         if "deepseek" in self.base_url.lower():
             effective_max = min(max_tokens, 16384)
+        elif self._is_zhipu_glm53_flash():
+            # GLM-5.3-Flash always reasons.  The reasoning tokens and the JSON
+            # answer share max_tokens, so the generic 16K cloud default can
+            # leave no room for the structured answer on larger prompts.
+            effective_max = max(max_tokens, 32768)
         payload: dict = {
             "model": self.model,
             "messages": messages,
@@ -246,6 +262,13 @@ class OpenAICompatibleClient:
             "max_tokens": effective_max,
             "stream": False,
         }
+        if self._is_zhipu_glm53_flash():
+            # This model does not support disabling thinking.  Be explicit so
+            # the request is not interpreted using a provider-specific default.
+            payload["thinking"] = {
+                "type": "enabled",
+                "clear_thinking": False,
+            }
         if format is not None:
             # Some providers (Zhipu GLM, Yi) don't fully support response_format
             # and may hang or error. Only use it for known-compatible providers.
@@ -310,9 +333,23 @@ class OpenAICompatibleClient:
             raise LLMError("Empty choices in cloud API response")
 
         choice = choices[0]
-        content: str = choice.get("message", {}).get("content", "")
+        message = choice.get("message", {})
+        content: str = message.get("content", "") or ""
         if not content:
-            raise LLMError("Empty content in cloud API response")
+            reasoning_tokens = data.get("usage", {}).get(
+                "completion_tokens_details", {}
+            ).get("reasoning_tokens", 0)
+            finish_reason = choice.get("finish_reason", "")
+            if reasoning_tokens or message.get("reasoning_content"):
+                raise LLMError(
+                    "Cloud API returned reasoning without answer content "
+                    f"(reasoning_tokens={reasoning_tokens}, "
+                    f"finish_reason={finish_reason!r}, model={self.model!r}); "
+                    "the model output limit may be too small"
+                )
+            raise LLMError(
+                f"Empty content in cloud API response for model {self.model!r}"
+            )
 
         finish_reason = choice.get("finish_reason", "")
 

@@ -54,6 +54,34 @@ from src.services.world_structure_agent import WorldStructureAgent
 
 logger = logging.getLogger(__name__)
 
+# Relationship graphs are expensive to build for long novels. Keep the
+# computed response in memory; the chapter-fact signature prevents stale data
+# after new analysis, while explicit invalidation handles entity edits.
+_graph_response_cache: dict[tuple, dict] = {}
+
+
+def invalidate_graph_response_cache(novel_id: str) -> None:
+    for key in [k for k in _graph_response_cache if k[0] == novel_id]:
+        _graph_response_cache.pop(key, None)
+
+
+async def _graph_cache_signature(novel_id: str) -> tuple:
+    conn = await get_connection()
+    try:
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n, MAX(extracted_at) AS latest FROM chapter_facts WHERE novel_id = ?",
+            (novel_id,),
+        )
+        facts = await cur.fetchone()
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n, MAX(created_at) AS latest FROM entity_overrides WHERE novel_id = ?",
+            (novel_id,),
+        )
+        overrides = await cur.fetchone()
+        return (facts["n"], facts["latest"], overrides["n"], overrides["latest"])
+    finally:
+        await conn.close()
+
 
 async def _load_facts_in_range(
     novel_id: str, chapter_start: int, chapter_end: int
@@ -124,6 +152,11 @@ async def get_analyzed_range(novel_id: str) -> tuple[int, int]:
 async def get_graph_data(
     novel_id: str, chapter_start: int, chapter_end: int
 ) -> dict:
+    signature = await _graph_cache_signature(novel_id)
+    cache_key = (novel_id, chapter_start, chapter_end, signature)
+    cached = _graph_response_cache.get(cache_key)
+    if cached is not None:
+        return cached
     from src.services.name_authority import (
         CANONICAL_BLOCKLIST,
         GENERIC_PERSON_ALIASES,
@@ -344,7 +377,7 @@ async def get_graph_data(
     for e in edges_out:
         type_counts[e["relation_type"]] += 1
 
-    return {
+    result = {
         "nodes": nodes,
         "edges": edges_out,
         "max_edge_weight": max_weight,
@@ -353,6 +386,8 @@ async def get_graph_data(
         "type_counts": dict(type_counts.most_common(20)),
         "filtered_ungrounded_persons": sorted(ungrounded),
     }
+    _graph_response_cache[cache_key] = result
+    return result
 
 
 # ── Map (Location Hierarchy + Trajectories) ──────

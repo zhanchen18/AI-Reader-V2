@@ -1,4 +1,4 @@
-import { memo } from "react"
+import { memo, useState } from "react"
 import type { PersonProfile } from "@/api/types"
 import { CardSection, ChapterTag, EntityLink } from "./CardSection"
 import { EntityScenes } from "./EntityScenes"
@@ -8,6 +8,7 @@ interface PersonCardProps {
   onEntityClick: (name: string, type: string) => void
   onChapterClick?: (ch: number) => void
   novelId?: string
+  onRelationOverride?: (other: string, action: "update" | "delete", relationType?: string) => Promise<void>
 }
 
 // Category labels and ordering
@@ -20,9 +21,24 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: "其他关系",
 }
 const CATEGORY_ORDER = ["family", "intimate", "hierarchical", "social", "hostile", "other"]
+const RELATION_TYPES = [
+  "父子", "父女", "母子", "母女", "兄弟", "兄妹", "姐弟", "姐妹",
+  "祖孙", "叔侄", "舅甥", "姑侄", "表亲", "堂亲", "夫妻", "妯娌", "姻亲",
+  "君臣", "宗室关系", "上官—下属", "同僚", "门生—座师", "主将—部将", "同袍", "结义兄弟",
+  "师徒", "师兄弟", "同门", "主仆", "家臣—主人",
+  "朋友", "故交", "同乡", "搭档", "盟友", "恩人", "仇家", "政敌", "利益联盟", "利用关系", "背叛关系", "保护关系", "敌对", "亲戚", "其他",
+]
 
-export const PersonCard = memo(function PersonCard({ profile, onEntityClick, onChapterClick, novelId }: PersonCardProps) {
+export const PersonCard = memo(function PersonCard({ profile, onEntityClick, onChapterClick, novelId, onRelationOverride }: PersonCardProps) {
   const { aliases, appearances, abilities, relations, items, experiences, stats } = profile
+  const identityEntries = abilities
+    .filter((a) => a.dimension === "身份")
+    .sort((a, b) => a.chapter - b.chapter)
+  const [addingRelation, setAddingRelation] = useState(false)
+  const [newPerson, setNewPerson] = useState("")
+  const [newType, setNewType] = useState("朋友")
+  const [editingRelation, setEditingRelation] = useState<string | null>(null)
+  const [editingType, setEditingType] = useState("朋友")
 
   // Group abilities by dimension
   const abilityGroups = new Map<string, typeof abilities>()
@@ -104,6 +120,13 @@ export const PersonCard = memo(function PersonCard({ profile, onEntityClick, onC
       </CardSection>
 
       {/* C. Relations — grouped by category */}
+      {onRelationOverride && (
+        <div className="border-b pb-2">
+          <button className="text-primary text-xs hover:underline" onClick={() => {
+            setAddingRelation(true)
+          }}>＋新增人物关系</button>
+        </div>
+      )}
       <CardSection title="人物关系" defaultLimit={15}>
         {CATEGORY_ORDER
           .filter(cat => relations.some(r => (r.category || "other") === cat))
@@ -127,6 +150,22 @@ export const PersonCard = memo(function PersonCard({ profile, onEntityClick, onC
                     />
                     <span className="text-muted-foreground mx-1">—</span>
                     <span>{latest?.relation_type ?? "未知"}</span>
+                    {onRelationOverride && (
+                      <span className="ml-2 text-[10px]">
+                        {editingRelation === rel.other_person ? (
+                          <>
+                            <select className="h-6 rounded border bg-background px-1 text-xs" value={editingType} onChange={(e) => setEditingType(e.target.value)}>
+                              {RELATION_TYPES.map((type) => <option key={type}>{type}</option>)}
+                            </select>
+                            <button className="text-primary ml-1 hover:underline" onClick={() => { void onRelationOverride(rel.other_person, "update", editingType); setEditingRelation(null) }}>保存</button>
+                            <button className="ml-1 hover:underline" onClick={() => setEditingRelation(null)}>取消</button>
+                          </>
+                        ) : <button className="text-primary hover:underline" onClick={() => { setEditingRelation(rel.other_person); setEditingType(latest?.relation_type ?? "朋友") }}>修改</button>}
+                        <button className="text-destructive ml-2 hover:underline" onClick={() => {
+                          if (window.confirm(`删除 ${profile.name} 与 ${rel.other_person} 的关系？`)) void onRelationOverride(rel.other_person, "delete")
+                        }}>删除</button>
+                      </span>
+                    )}
                     {rel.stages.length > 1 && (
                       <span className="text-muted-foreground ml-1 text-xs">
                         ({rel.stages.map((s, si) => {
@@ -186,9 +225,19 @@ export const PersonCard = memo(function PersonCard({ profile, onEntityClick, onC
               }),
           ])}
       </CardSection>
+      {addingRelation && onRelationOverride && (
+        <div className="border-b px-1 py-2 flex flex-wrap items-center gap-1.5">
+          <input className="h-7 w-28 rounded border bg-background px-2 text-xs" placeholder="对方人物" value={newPerson} onChange={(e) => setNewPerson(e.target.value)} />
+          <select className="h-7 rounded border bg-background px-1 text-xs" value={newType} onChange={(e) => setNewType(e.target.value)}>
+            {RELATION_TYPES.map((type) => <option key={type}>{type}</option>)}
+          </select>
+          <button className="text-primary text-xs hover:underline" onClick={() => { if (newPerson.trim()) { void onRelationOverride(newPerson.trim(), "update", newType); setNewPerson(""); setAddingRelation(false) } }}>保存</button>
+          <button className="text-xs hover:underline" onClick={() => setAddingRelation(false)}>取消</button>
+        </div>
+      )}
 
-      {/* D. Abilities */}
-      <CardSection title="能力" defaultLimit={8}>
+      {/* D. Abilities and identity history */}
+      <CardSection title="能力与身份经历" defaultLimit={8}>
         {Array.from(abilityGroups.entries()).flatMap(([dim, abs]) => [
           <div key={`dim-${dim}`} className="text-muted-foreground mt-1 text-xs font-medium first:mt-0">
             {dim}
@@ -204,6 +253,24 @@ export const PersonCard = memo(function PersonCard({ profile, onEntityClick, onC
           )),
         ])}
       </CardSection>
+
+      {identityEntries.length > 0 && (
+        <CardSection title="身份/官职变迁" defaultLimit={8}>
+          {identityEntries.map((entry, i) => {
+            const next = identityEntries[i + 1]?.chapter
+            return (
+              <div key={`${entry.chapter}-${entry.name}-${i}`} className="text-sm">
+                <ChapterTag chapter={entry.chapter} onClick={onChapterClick} />
+                <span className="ml-1.5 font-medium">{entry.name}</span>
+                <span className="text-muted-foreground ml-1 text-xs">
+                  （至 {next ? `Ch.${next - 1}` : "当前分析范围末尾"}）
+                </span>
+                {entry.description && <span className="text-muted-foreground ml-1">{entry.description}</span>}
+              </div>
+            )
+          })}
+        </CardSection>
+      )}
 
       {/* E. Items */}
       <CardSection title="物品关系" defaultLimit={5}>

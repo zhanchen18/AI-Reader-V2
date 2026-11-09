@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
-import { fetchEntityProfile } from "@/api/client"
+import { fetchEntityProfile, overrideRelation } from "@/api/client"
 import type { EntityProfile, EntityType } from "@/api/types"
 import { useEntityCardStore } from "@/stores/entityCardStore"
 import { useReadingStore } from "@/stores/readingStore"
@@ -89,6 +89,12 @@ export function EntityCardDrawer({ novelId }: EntityCardDrawerProps) {
     [navigateTo],
   )
 
+  const handleRelationOverride = useCallback(async (other: string, action: "update" | "delete", relationType?: string) => {
+    if (!profile || profile.type !== "person") return
+    await overrideRelation(novelId, profile.name, other, action, relationType)
+    refresh()
+  }, [novelId, profile, refresh])
+
   const handleChapterClick = useCallback(
     (ch: number) => {
       close()
@@ -172,7 +178,7 @@ export function EntityCardDrawer({ novelId }: EntityCardDrawerProps) {
           {!loading && !cardError && profile && (
             <>
               {profile.type === "person" && (
-                <PersonCard profile={profile} onEntityClick={handleEntityClick} onChapterClick={handleChapterClick} novelId={novelId} />
+                <PersonCard profile={profile} onEntityClick={handleEntityClick} onChapterClick={handleChapterClick} novelId={novelId} onRelationOverride={handleRelationOverride} />
               )}
               {profile.type === "location" && (
                 <LocationCard profile={profile} onEntityClick={handleEntityClick} onChapterClick={handleChapterClick} novelId={novelId} />

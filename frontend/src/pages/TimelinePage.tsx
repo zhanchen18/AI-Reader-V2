@@ -101,6 +101,7 @@ export default function TimelinePage() {
   const [showSwimlanes, setShowSwimlanes] = useState(false)
   const [selectedPersons, setSelectedPersons] = useState<string[]>([])
   const [collapsedChapters, setCollapsedChapters] = useState<Set<number>>(new Set())
+  const [chapterDescending, setChapterDescending] = useState(true)
 
   const toggleTypeFilter = useCallback((type: string) => {
     const prev = useTimelineStore.getState().filterTypes
@@ -179,15 +180,24 @@ export default function TimelinePage() {
       if (!groups.has(evt.chapter)) groups.set(evt.chapter, [])
       groups.get(evt.chapter)!.push(evt)
     }
-    return Array.from(groups.entries()).sort((a, b) => a[0] - b[0])
-  }, [filteredEvents])
+    return Array.from(groups.entries()).sort((a, b) =>
+      chapterDescending ? b[0] - a[0] : a[0] - b[0],
+    )
+  }, [filteredEvents, chapterDescending])
+
+  // Start each loaded/filtered chapter list collapsed so the timeline stays compact.
+  useEffect(() => {
+    setCollapsedChapters(new Set(chapterGroups.map(([ch]) => ch)))
+  }, [chapterGroups])
 
   // Auto-collapse chapters that only have low-importance events
   const autoCollapsedChapters = useMemo(() => {
     if (!autoCollapseLow) return new Set<number>()
     const auto = new Set<number>()
     for (const [ch, evts] of chapterGroups) {
-      if (evts.every((e) => e.importance === "low" && !e.is_major)) {
+      // Keep chapters containing a high-importance or explicitly major event
+      // open; collapse chapters whose events are only medium/low importance.
+      if (!evts.some((e) => e.importance === "high" || e.is_major)) {
         auto.add(ch)
       }
     }
@@ -359,6 +369,15 @@ export default function TimelinePage() {
             title="自动折叠仅有低重要度事件的章节"
           >
             自动折叠
+          </Button>
+
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => setChapterDescending(!chapterDescending)}
+            title="按章节号切换正序或倒序"
+          >
+            {chapterDescending ? "章节倒序" : "章节正序"}
           </Button>
 
           <div className="flex-1" />

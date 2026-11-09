@@ -99,3 +99,59 @@ async def test_unrelated_400_is_not_downgraded():
         await client.generate("sys", "usr", format={"type": "json_object"})
 
     assert calls["n"] == 1, "an unrelated 400 must not trigger a retry"
+
+
+@pytest.mark.asyncio
+async def test_zhipu_glm53_flash_enables_thinking_and_allows_reasoning_budget():
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content.decode()))
+        return httpx.Response(200, json=_reply({"characters": []}))
+
+    client = _client(
+        handler,
+        "https://open.bigmodel.cn/api/paas/v4",
+    )
+    client.model = "glm-5.3-flash"
+    result, _usage = await client.generate(
+        "sys", "usr", format={"type": "object"}, max_tokens=16384
+    )
+
+    assert result == {"characters": []}
+    assert seen[0]["thinking"] == {
+        "type": "enabled",
+        "clear_thinking": False,
+    }
+    assert seen[0]["max_tokens"] == 32768
+    assert "response_format" not in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_response_has_diagnostic_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "reasoning_content": "thinking",
+                        },
+                        "finish_reason": "length",
+                    }
+                ],
+                "usage": {
+                    "completion_tokens_details": {"reasoning_tokens": 16384}
+                },
+            },
+        )
+
+    client = _client(
+        handler,
+        "https://open.bigmodel.cn/api/paas/v4",
+    )
+    client.model = "glm-5.3-flash"
+    with pytest.raises(LLMError, match="reasoning without answer content"):
+        await client.generate("sys", "usr", format={"type": "object"})

@@ -570,20 +570,16 @@ export default function StorylineView({
                           const best = chEvts.reduce((a, b) => impRank(a) >= impRank(b) ? a : b)
                           const count = chEvts.length
                           const r = eventRadius(best.importance, best.is_major)
+                          // Keep the visual node small, but make hover/click easier.
+                          const hitRadius = Math.max(10, r + 6)
                           const isEvtSelected = selectedEvent?.id === best.id
                           const dimmed = selectedEvent != null && !isEvtSelected
 
                           nodes.push(
                             <g key={`${ch}-${char}`}>
-                              {best.is_major && (
-                                <circle cx={cx} cy={midY} r={r + 3} fill="none" stroke={color} strokeWidth={1} opacity={0.4} />
-                              )}
                               <circle
-                                cx={cx} cy={midY} r={r}
-                                fill={eventColor(best.type)}
-                                stroke={isEvtSelected ? "#3b82f6" : "none"}
-                                strokeWidth={isEvtSelected ? 2 : 0}
-                                opacity={dimmed ? 0.2 : 1}
+                                cx={cx} cy={midY} r={hitRadius}
+                                fill="transparent"
                                 className="cursor-pointer"
                                 onMouseEnter={(e) => {
                                   setTooltip({
@@ -593,6 +589,17 @@ export default function StorylineView({
                                 }}
                                 onMouseLeave={() => setTooltip(null)}
                                 onClick={(e) => { e.stopPropagation(); setSelectedEvent(best); setTooltip(null) }}
+                              />
+                              {best.is_major && (
+                                <circle cx={cx} cy={midY} r={r + 3} fill="none" stroke={color} strokeWidth={1} opacity={0.4} />
+                              )}
+                              <circle
+                                cx={cx} cy={midY} r={r}
+                                fill={eventColor(best.type)}
+                                stroke={isEvtSelected ? "#3b82f6" : "none"}
+                                strokeWidth={isEvtSelected ? 2 : 0}
+                                opacity={dimmed ? 0.2 : 1}
+                                className="pointer-events-none"
                               />
                               {/* Count badge for multi-event chapters */}
                               {count > 1 && zoomK >= 3 && (
