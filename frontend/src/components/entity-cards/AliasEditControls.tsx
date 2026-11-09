@@ -15,6 +15,7 @@ import {
 import { useEntityCardStore } from "@/stores/entityCardStore"
 import { ENTITY_COLORS } from "@/lib/entityHighlight"
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import {
@@ -68,7 +69,7 @@ export function AliasEditControls({ novelId, profile }: Props) {
   // ── Merge state ──
   const [candidates, setCandidates] = useState<EntitySummary[]>([])
   const [query, setQuery] = useState("")
-  const [target, setTarget] = useState<EntitySummary | null>(null)
+  const [targets, setTargets] = useState<EntitySummary[]>([])
   const [mergeMembers, setMergeMembers] = useState<string[]>([])
   const [canonical, setCanonical] = useState(profile.name)
 
@@ -79,7 +80,7 @@ export function AliasEditControls({ novelId, profile }: Props) {
   const reset = useCallback(() => {
     setError(null)
     setBusy(false)
-    setTarget(null)
+    setTargets([])
     setQuery("")
     setMergeMembers([])
     setCanonical(profile.name)
@@ -153,22 +154,31 @@ export function AliasEditControls({ novelId, profile }: Props) {
   // On target selection, pull the target's aliases so the merge member set is
   // complete (the alias map is flat — every name must be listed explicitly).
   async function selectTarget(t: EntitySummary) {
-    setTarget(t)
     setError(null)
+    const nextTargets = targets.some((x) => x.name === t.name)
+      ? targets.filter((x) => x.name !== t.name)
+      : [...targets, t]
+    setTargets(nextTargets)
+    if (nextTargets.length === 0) {
+      setMergeMembers([])
+      return
+    }
     try {
-      const tp = (await fetchEntityProfile(novelId, t.name, t.type)) as unknown as EntityProfile
-      const members = Array.from(
-        new Set([profile.name, ...aliasNames(profile), t.name, ...aliasNames(tp)]),
-      )
+      const profiles = await Promise.all(nextTargets.map((x) => fetchEntityProfile(novelId, x.name, x.type) as Promise<unknown> as Promise<EntityProfile>))
+      const members = Array.from(new Set([
+        profile.name,
+        ...aliasNames(profile),
+        ...nextTargets.flatMap((x, i) => [x.name, ...aliasNames(profiles[i])]),
+      ]))
       setMergeMembers(members)
       setCanonical(profile.name)
     } catch {
-      setMergeMembers([profile.name, ...aliasNames(profile), t.name])
+      setMergeMembers([profile.name, ...aliasNames(profile), ...nextTargets.map((x) => x.name)])
     }
   }
 
   async function doMerge() {
-    if (!target || mergeMembers.length < 2) return
+    if (targets.length === 0 || mergeMembers.length < 2) return
     setBusy(true)
     setError(null)
     try {
@@ -283,11 +293,10 @@ export function AliasEditControls({ novelId, profile }: Props) {
       <Dialog open={mergeOpen} onOpenChange={(o) => { setMergeOpen(o); if (!o) reset() }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>合并「{profile.name}」到另一个实体</DialogTitle>
+          <DialogTitle>合并「{profile.name}」与多个实体</DialogTitle>
           </DialogHeader>
 
-          {!target ? (
-            <div className="space-y-2">
+          <div className="space-y-2">
               <Input
                 placeholder="搜索目标实体…"
                 value={query}
@@ -298,9 +307,10 @@ export function AliasEditControls({ novelId, profile }: Props) {
                 {filtered.map((c) => (
                   <button
                     key={c.name}
-                    className="hover:bg-accent block w-full px-3 py-1.5 text-left text-sm"
+                    className={cn("hover:bg-accent flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm", targets.some((t) => t.name === c.name) && "bg-accent")}
                     onClick={() => selectTarget(c)}
                   >
+                    <input type="checkbox" checked={targets.some((t) => t.name === c.name)} readOnly />
                     {c.name}
                     <span className="text-muted-foreground ml-2 text-xs">{c.chapter_count} 章</span>
                   </button>
@@ -309,11 +319,11 @@ export function AliasEditControls({ novelId, profile }: Props) {
                   <p className="text-muted-foreground px-3 py-2 text-sm">无匹配实体</p>
                 )}
               </div>
-            </div>
-          ) : (
+          </div>
+          {targets.length > 0 && (
             <div className="space-y-3 text-sm">
               <p>
-                把 <b>{profile.name}</b> 与 <b>{target.name}</b> 合并，共 {mergeMembers.length} 个别名：
+                把 <b>{profile.name}</b> 与 <b>{targets.map((t) => t.name).join("、")}</b> 合并，共 {mergeMembers.length} 个别名：
               </p>
               <p className="text-muted-foreground max-h-20 overflow-y-auto">
                 {mergeMembers.join(" · ")}
@@ -321,7 +331,7 @@ export function AliasEditControls({ novelId, profile }: Props) {
               <div>
                 <p className="mb-1 font-medium">显示名：</p>
                 <div className="flex flex-wrap gap-3">
-                  {[profile.name, target.name].map((n) => (
+                  {[profile.name, ...targets.map((t) => t.name)].map((n) => (
                     <label key={n} className="flex items-center gap-1">
                       <input
                         type="radio"
@@ -341,12 +351,12 @@ export function AliasEditControls({ novelId, profile }: Props) {
           {error && <p className="text-destructive text-sm">{error}</p>}
 
           <DialogFooter>
-            {target && (
-              <Button variant="ghost" size="sm" onClick={() => setTarget(null)} disabled={busy}>
-                返回
+            {targets.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={() => setTargets([])} disabled={busy}>
+                重新选择
               </Button>
             )}
-            <Button size="sm" onClick={doMerge} disabled={!target || busy}>
+            <Button size="sm" onClick={doMerge} disabled={targets.length === 0 || busy}>
               {busy ? "合并中…" : "确认合并"}
             </Button>
           </DialogFooter>
