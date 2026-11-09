@@ -4,6 +4,7 @@ import {
   checkEnvironment,
   clearAnalysisData,
   fetchCostEstimate,
+  fetchChapters,
   fetchEntityDictionary,
   fetchNovel,
   fetchPrescanStatus,
@@ -311,12 +312,17 @@ export default function AnalysisPage() {
 
     async function load() {
       try {
-        const [n, { task: latestTask, stats: latestStats, quality: latestQuality, timing: latestTiming, failed_chapters: latestFailed, retry_progress: latestRetry }] = await Promise.all([
+        const [n, { chapters }, { task: latestTask, stats: latestStats, quality: latestQuality, timing: latestTiming, failed_chapters: latestFailed, retry_progress: latestRetry }] = await Promise.all([
           fetchNovel(novelId!),
+          fetchChapters(novelId!),
           getLatestAnalysisTask(novelId!),
         ])
         if (cancelled) return
         setNovel(n)
+        const firstUnanalyzed = chapters
+          .filter((chapter) => chapter.analysis_status !== "completed" && !chapter.is_excluded)
+          .sort((a, b) => a.chapter_num - b.chapter_num)[0]?.chapter_num
+        setRangeStart(firstUnanalyzed ?? n.total_chapters)
         setRangeEnd(n.total_chapters)
         if (latestTask) {
           setTask(latestTask)
